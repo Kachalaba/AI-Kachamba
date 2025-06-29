@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 
 import openai
 from dotenv import load_dotenv
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -58,6 +59,18 @@ async def echo(update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(update.message.text)
 
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Respond to user messages in Nikita's style."""
+    message_text = update.message.text
+    user_name = update.effective_user.first_name
+    prompt = (
+        f"Користувач на ім'я '{user_name}' пише в чаті: '{message_text}'. "
+        "Дай відповідь в стилі Нікіти, звертаючись до користувача."
+    )
+    ai_response = generate_ai_response(prompt)
+    await update.message.reply_text(ai_response)
+
+
 async def scheduled_post_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Generate and send a daily post according to schedule."""
     theme = get_scheduled_theme()
@@ -79,7 +92,16 @@ def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    target_filter = filters.Chat(chat_id=int(TARGET_CHAT_ID))
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & target_filter,
+            handle_message,
+        )
+    )
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & ~target_filter, echo)
+    )
 
     job_queue = application.job_queue
     job_queue.run_daily(scheduled_post_job, time(hour=10, minute=0))
