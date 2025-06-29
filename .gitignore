@@ -1,0 +1,6 @@
+__pycache__/
+logs/
+build/
+dist/
+*.session
+.env
