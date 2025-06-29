@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, time
 from logging.handlers import RotatingFileHandler
 
 import openai
@@ -15,6 +15,8 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+from ai_utils import generate_ai_response, get_scheduled_theme, is_unique, save_history
 
 # Logging configuration
 os.makedirs("logs", exist_ok=True)
@@ -56,12 +58,31 @@ async def echo(update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(update.message.text)
 
 
+async def scheduled_post_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send a daily post according to schedule."""
+    theme = get_scheduled_theme()
+    if not theme:
+        logging.warning("Не найдена тема для сегодняшнего поста")
+        return
+    prompt = f"Напиши пост на тему '{theme}'."
+    post = generate_ai_response(prompt)
+    if is_unique(post):
+        await context.bot.send_message(chat_id=TARGET_CHAT_ID, text=post)
+        save_history(post)
+        logging.info("Scheduled post sent")
+    else:
+        logging.warning("Дубликат поста, отправка отменена")
+
+
 def main() -> None:
     """Run the bot."""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+
+    job_queue = application.job_queue
+    job_queue.run_daily(scheduled_post_job, time(hour=10, minute=0))
 
     application.run_polling()
 
