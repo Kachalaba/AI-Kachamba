@@ -1,15 +1,21 @@
+# ruff: noqa: D401
+
 import argparse
 import asyncio
 import logging
 import os
-from datetime import date, datetime, timedelta
+from datetime import datetime
 
-import openai
 from dotenv import load_dotenv
-from telethon import TelegramClient
-from telethon.errors import RPCError
 
-from ai_utils import get_scheduled_theme, is_unique, load_identity, save_history
+from ai_utils import (
+    async_chat_completion,
+    get_scheduled_theme,
+    is_unique,
+    load_identity,
+    save_history,
+)
+from telegram_client import send_message
 
 # Логирование
 logging.basicConfig(
@@ -33,37 +39,39 @@ LAST_POST_FILE = os.getenv("LAST_POST_FILE", "last_post.txt")
 openai.api_key = OPENAI_API_KEY
 
 
-# Генерация через OpenAI
-def generate_post(theme, tone, length, hashtags, mention, model, temp):
+# Генерация через OpenAI (асинхронно)
+async def generate_post_async(
+    theme: str,
+    tone: str,
+    length: str,
+    hashtags: str | None,
+    mention: str | None,
+    model: str,
+    temp: float,
+) -> str:
+    """Generate post content asynchronously using OpenAI."""
+
     identity = load_identity()
     user_content = f"Тема: {theme}\nТон: {tone}\nДлина: {length}"
     if hashtags:
         user_content += f"\nХэштеги: {hashtags}"
     if mention:
         user_content += f"\nУпоминання: {mention}"
+
     messages = [
         {"role": "system", "content": identity},
         {"role": "user", "content": user_content},
     ]
-    logging.info(f"GPT запрос: тема={theme}, тон={tone}, длина={length}")
-    resp = openai.ChatCompletion.create(
-        model=model, messages=messages, temperature=temp
-    )
-    return resp.choices[0].message.content
+    logging.info("GPT запрос: тема=%s, тон=%s, длина=%s", theme, tone, length)
+    return await async_chat_completion(messages, model=model, temperature=temp)
 
 
-# Отправка Telegram
-async def send_to_telegram(text, image, file):
+# Телеграм отправка через пул клиента
+async def send_to_telegram(text: str, image: str | None, file: str | None):
     try:
-        async with TelegramClient(SESSION_NAME, API_ID, API_HASH) as client:
-            if image:
-                await client.send_file(TARGET, image, caption=text)
-            elif file:
-                await client.send_file(TARGET, file, caption=text)
-            else:
-                await client.send_message(TARGET, text)
-    except RPCError as e:
-        logging.error(f"Telegram error: {e}")
+        await send_message(text, image=image, file=file)
+    except Exception as exc:  # noqa: BLE001
+        logging.error("Telegram error: %s", exc)
 
 
 # Парсинг времени отправки
@@ -97,14 +105,14 @@ def parse_args():
     return p.parse_args()
 
 
-# Main
-def main():
-    args = parse_args()
+# Main coroutine
+async def autopost_flow(args):
     theme = get_scheduled_theme() if args.schedule else args.theme
     if not theme:
         logging.error("Тема не указана или не найдена.")
         return
-    post = generate_post(
+
+    post = await generate_post_async(
         theme,
         args.tone,
         args.length,
@@ -113,16 +121,23 @@ def main():
         args.model,
         args.temp,
     )
+
     if not is_unique(post):
         logging.warning("Дубликат, отменяем.")
         return
+
     wait = schedule_delay(args.send_at, args.delay)
     if wait > 0:
-        logging.info(f"Ждём {wait} секунд перед отправкой...")
-        asyncio.run(asyncio.sleep(wait))
-    asyncio.run(send_to_telegram(post, args.image, args.file))
+        logging.info("Ждём %s секунд перед отправкой...", wait)
+        await asyncio.sleep(wait)
+
+    await send_to_telegram(post, args.image, args.file)
     save_history(post)
     logging.info("VIP пост отправлен и сохранён.")
+
+
+def main():  # entry point kept for backward compatibility
+    asyncio.run(autopost_flow(parse_args()))
 
 
 if __name__ == "__main__":

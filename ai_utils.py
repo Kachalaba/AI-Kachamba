@@ -1,10 +1,23 @@
 import logging
 import os
 from datetime import datetime
+from functools import lru_cache
 from logging.handlers import RotatingFileHandler
-from typing import Optional
+from typing import List, Optional
 
-import openai
+# Lazy OpenAI import to improve cold-start performance
+_openai = None  # type: ignore
+
+
+def _get_openai():
+    global _openai  # noqa: PLW0603
+    if _openai is None:
+        import openai  # type: ignore
+
+        openai.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+        _openai = openai
+    return _openai
+
 
 # Logging configuration
 logger = logging.getLogger(__name__)
@@ -26,8 +39,10 @@ if not logger.handlers:
     logger.addHandler(stderr_handler)
 
 
+@lru_cache(maxsize=1)
 def load_identity(path: Optional[str] = None) -> str:
-    """Load bot identity text from a file."""
+    """Load bot identity text from a file. Cached on first read."""
+
     path = path or os.getenv("IDENTITY_FILE", "kachamba_identity.txt")
     try:
         with open(path, encoding="utf-8") as f:
@@ -37,8 +52,10 @@ def load_identity(path: Optional[str] = None) -> str:
         return ""
 
 
+@lru_cache(maxsize=1)
 def get_scheduled_theme(path: Optional[str] = None) -> Optional[str]:
-    """Return today's theme from schedule file if available."""
+    """Return today's theme from schedule file if available. Cached per process."""
+
     path = path or os.getenv("THEME_SCHEDULE_FILE", "theme_schedule.txt")
     day = datetime.today().strftime("%A").lower()
     try:
@@ -72,20 +89,38 @@ def save_history(post: str, path: Optional[str] = None) -> None:
         f.write(post)
 
 
-def generate_ai_response(prompt_text: str) -> str:
-    """Generate a response from OpenAI using loaded identity."""
+async def async_chat_completion(
+    messages: List[dict],
+    model: str = "gpt-4",
+    temperature: float = 0.8,
+) -> str:
+    """Async wrapper around OpenAI ChatCompletion that works for both v0 & v1 SDKs."""
+
+    openai = _get_openai()
+    try:
+        # New client-style API (>=1.0.0)
+        if hasattr(openai, "AsyncOpenAI"):
+            client = openai.AsyncOpenAI()
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, temperature=temperature
+            )
+            return resp.choices[0].message.content  # type: ignore[index]
+        # Legacy coroutine API (<1.0.0)
+        resp = await openai.ChatCompletion.acreate(  # type: ignore[attr-defined]
+            model=model, messages=messages, temperature=temperature
+        )
+        return resp["choices"][0]["message"]["content"]
+    except Exception as exc:  # noqa: BLE001
+        logger.error("OpenAI API request failed: %s", exc)
+        raise
+
+
+async def generate_ai_response(prompt_text: str) -> str:  # backwards-compatible alias
+    """Generate a response from OpenAI asynchronously using loaded identity."""
+
     identity = load_identity()
     messages = [
         {"role": "system", "content": identity},
         {"role": "user", "content": prompt_text},
     ]
-    try:
-        resp = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=messages,
-            temperature=0.8,
-        )
-        return resp.choices[0].message.content
-    except Exception as exc:  # OpenAI raises several exception types
-        logger.error("OpenAI API request failed: %s", exc)
-        raise
+    return await async_chat_completion(messages)

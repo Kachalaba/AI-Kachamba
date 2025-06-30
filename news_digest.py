@@ -1,14 +1,15 @@
-import openai
 import os
-import feedparser
-from dotenv import load_dotenv
-from telethon.sync import TelegramClient
 from datetime import datetime
 
+import feedparser
+from dotenv import load_dotenv
+
+from ai_utils import generate_ai_response as generate_ai_response_async
+from telegram_client import send_message
+
 load_dotenv()
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-openai.api_key = os.getenv("OPENAI_KEY")
+api_id = int(os.getenv("API_ID", 0))
+api_hash = os.getenv("API_HASH", "")
 
 MODEL = "gpt-4"
 PREVIEW_TARGET = "me"
@@ -28,36 +29,34 @@ def load_file(path):
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
-def generate_digest(system_prompt, news_prompt, news_text):
-    response = openai.ChatCompletion.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": news_prompt + "\n\nОсь новини:\n" + news_text}
-        ]
-    )
-    return response.choices[0].message.content.strip()
+async def generate_digest(system_prompt, news_prompt, news_text):
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": news_prompt + "\n\nОсь новини:\n" + news_text},
+    ]
+    return await generate_ai_response_async("\n".join([system_prompt, news_prompt, news_text]))
 
-def send_to_telegram(message, target):
-    with TelegramClient('kachamba_session', api_id, api_hash) as client:
-        client.send_message(target, message)
-        print(f"✅ Дайджест відправлено у {target}")
+async def send_to_telegram(message, target):
+    await send_message(message, target=target)
 
-def main():
+async def main_async():
     news_text = fetch_news()
-    identity = load_file("C:\\Users\\user\\Desktop\\KachalabaGP\\lowpulse\\kachamba_identity.txt")
-    news_prompt = load_file("C:\\Users\\user\\Desktop\\KachalabaGP\\lowpulse\\prompts\\news.txt")
-    digest = generate_digest(identity, news_prompt, news_text)
+    identity = load_file("kachamba_identity.txt")
+    news_prompt = load_file("news.txt") if os.path.exists("news.txt") else "Згенеруй дайджест."
+    digest = await generate_digest(identity, news_prompt, news_text)
 
-    with open("C:\\Users\\user\\Desktop\\KachalabaGP\\lowpulse\\last_news_digest.txt", "w", encoding="utf-8") as f:
+    with open("last_news_digest.txt", "w", encoding="utf-8") as f:
         f.write(digest)
 
     preview_message = (
-        "🗞️ *Щотижневий дайджест Low Pulse:*\n\n"
-        + digest
-        + "\n\n⚠️ Перед публікацією перевір стиль, фактологію і подачу."
+        "🗞️ *Щотижневий дайджест Low Pulse:*\n\n" + digest + "\n\n⚠️ Перед публікацією перевір стиль, фактологію і подачу."
     )
-    send_to_telegram(preview_message, PREVIEW_TARGET)
+    await send_to_telegram(preview_message, PREVIEW_TARGET)
+
+def main():
+    import asyncio
+
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()

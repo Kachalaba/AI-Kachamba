@@ -1,31 +1,53 @@
-from telethon.sync import TelegramClient
-from telethon.tl.functions.messages import SendMessageRequest
-from dotenv import load_dotenv
-import openai
-import os
+import argparse
+import asyncio
+import logging
+import sys
+from importlib import import_module
+from types import ModuleType
+from typing import Callable, Dict
 
-# Загрузка переменных из .env
-load_dotenv()
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-openai.api_key = os.getenv("OPENAI_KEY")
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
-# Целевая цель (можно заменить на username, chat_id, канал)
-TARGET = "me"  # Для теста — сообщение себе
 
-def generate_post():
-    prompt = "Напиши короткий, стильный пост о восстановлении после тренировок. Без банальщины, до 800 символов."
+SubCommand = Callable[[list[str]], None]
 
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "Ты спортивный Telegram-блогер, пишешь лаконичные, умные посты с харизмой."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message.content.strip()
 
-with TelegramClient('kachamba_session', api_id, api_hash) as client:
-    post = generate_post()
-    client.send_message(TARGET, post)
-    print("Пост отправлен себе. Проверь Telegram.")
+def _lazy_import(name: str) -> ModuleType:
+    """Import module only when its sub-command is invoked."""
+    return import_module(name)
+
+
+def _run_autopost(_: list[str]) -> None:
+    module = _lazy_import("autopost")
+    module.main()
+
+
+def _run_bot(_: list[str]) -> None:
+    module = _lazy_import("bot")
+    module.main()
+
+
+def _run_digest(_: list[str]) -> None:
+    module = _lazy_import("news_digest")
+    module.main()
+
+
+COMMANDS: Dict[str, SubCommand] = {
+    "autopost": _run_autopost,
+    "bot": _run_bot,
+    "news-digest": _run_digest,
+}
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = argv or sys.argv[1:]
+    parser = argparse.ArgumentParser(description="AI-Kachamba unified CLI")
+    parser.add_argument("command", choices=COMMANDS.keys(), help="Which sub-command to run")
+    parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to sub-command")
+    ns = parser.parse_args(argv)
+
+    COMMANDS[ns.command](ns.args)
+
+
+if __name__ == "__main__":
+    main()

@@ -6,7 +6,6 @@ import os
 from datetime import datetime, time
 from logging.handlers import RotatingFileHandler
 
-import openai
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -17,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-from ai_utils import generate_ai_response, get_scheduled_theme, is_unique, save_history
+from ai_utils import generate_ai_response as generate_ai_response_async, get_scheduled_theme, is_unique, save_history
 
 # Logging configuration
 os.makedirs("logs", exist_ok=True)
@@ -41,11 +40,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
 
-if not all([TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, TARGET_CHAT_ID]):
+if not all([TELEGRAM_BOT_TOKEN, TARGET_CHAT_ID]):
     logging.critical("Required environment variables are missing")
     raise SystemExit(1)
-
-openai.api_key = OPENAI_API_KEY
 
 
 async def start_command(update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -67,7 +64,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Користувач на ім'я '{user_name}' пише в чаті: '{message_text}'. "
         "Дай відповідь в стилі Нікіти, звертаючись до користувача."
     )
-    ai_response = generate_ai_response(prompt)
+    ai_response = await generate_ai_response_async(prompt)
     await update.message.reply_text(ai_response)
 
 
@@ -78,7 +75,7 @@ async def scheduled_post_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logging.warning("Не найдена тема для сегодняшнего поста")
         return
     prompt = f"Напиши пост на тему '{theme}'."
-    post = generate_ai_response(prompt)
+    post = await generate_ai_response_async(prompt)
     if is_unique(post):
         await context.bot.send_message(chat_id=TARGET_CHAT_ID, text=post)
         save_history(post)
